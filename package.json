@@ -1,0 +1,26 @@
+{
+  "name": "dep-doctor",
+  "version": "0.1.0",
+  "description": "The upgrade bot that finishes the job — triage-and-research engine for npm dependency upgrades.",
+  "type": "module",
+  "bin": {
+    "dep-doctor": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "keywords": [
+    "dependencies",
+    "npm",
+    "upgrade",
+    "security",
+    "audit",
+    "changelog",
+    "maintenance"
+  ]
+}

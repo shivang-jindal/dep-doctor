@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "ecosystems": ["npm"],
+  "ci": {
+    "test": null,
+    "timeout": 60
+  },
+  "update": {
+    "include": ["*"],
+    "exclude": ["@acme/*"],
+    "majors": "auto"
+  },
+  "budget": {
+    "attempts-per-dep": 3,
+    "minutes-per-dep": 30
+  },
+  "pr": {
+    "labels": ["deps", "automated"]
+  }
+}

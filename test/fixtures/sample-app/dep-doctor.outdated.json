@@ -1,0 +1,6 @@
+{
+  "zod": { "current": "3.22.4", "wanted": "3.23.8", "latest": "4.1.0", "dependent": "sample-app" },
+  "left-pad": { "current": "1.0.0", "wanted": "1.0.0", "latest": "1.0.3", "dependent": "sample-app" },
+  "tiny-lib": { "current": "1.2.0", "wanted": "1.2.1", "latest": "1.2.1", "dependent": "sample-app" },
+  "@acme/ui": { "current": "2.0.0", "wanted": "2.1.0", "latest": "2.1.0", "dependent": "sample-app" }
+}

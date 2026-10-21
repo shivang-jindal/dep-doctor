@@ -1,0 +1,11 @@
+{
+  "name": "ambiguous-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node verify.js"
+  },
+  "dependencies": {
+    "left-pad": "1.0.0"
+  }
+}

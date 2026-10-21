@@ -1,0 +1,15 @@
+{
+  "name": "sample-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "dep-doctor fixture: green baseline; breaks when zod hits v4 or tiny-lib 1.2.1.",
+  "scripts": {
+    "test": "node verify.js"
+  },
+  "dependencies": {
+    "zod": "^3.22.4",
+    "left-pad": "1.0.0",
+    "tiny-lib": "^1.2.0",
+    "@acme/ui": "^2.0.0"
+  }
+}
