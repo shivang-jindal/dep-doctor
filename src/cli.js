@@ -10,6 +10,10 @@ import { UsageError } from './errors.js';
 import { runDoctor, TOOL_VERSION, renderJSON, renderMarkdown, renderTerminal } from './run.js';
 import { buildDigest } from './research.js';
 import { SCHEMA_VERSION } from './report.js';
+import { loadConfig } from './config.js';
+import { createOfflineFetch } from './outdated.js';
+import { buildPlan } from './plan.js';
+import { parseSemver, bareVersion, matchesAny } from './util.js';
 
 const EXIT_OK = 0;
 const EXIT_HUMAN = 1;
@@ -20,11 +24,23 @@ const HELP = `dep-doctor v${TOOL_VERSION} — the upgrade bot that finishes the 
 
 Usage:
   dep-doctor run [options]        triage outdated deps (plan → baseline → attempt → research → report)
+  dep-doctor plan --outdated <file> [--json]
+                                  planning phase only: classify each outdated dep (no baseline, no attempts)
   dep-doctor report <file> [--format terminal|json|md]
                                   re-render a saved JSON report (exits with the report's exit code)
   dep-doctor explain --root <dir> --dep <name> --from <ver> --to <ver> [--format terminal|json]
                                   print the ResearchDigest for one upgrade (changelog range + usage sites)
   dep-doctor --help | --version
+
+plan options (planning phase only — never installs, never runs tests):
+  --root <dir>          target repo (default: cwd)
+  --config <file>       JSON config (default: <root>/dep-doctor.config.json; see SPEC §2 subset)
+  --outdated <file>     outdated snapshot file (required; \`npm outdated --json\` shape)
+  --test-cmd <cmd>      oracle hint: marks testable candidates \`pending\` instead of \`unknown\`
+  --attempts <n>        override budget["attempts-per-dep"]
+  --include <glob>      add an include rule (repeatable)
+  --exclude <glob>      add an exclude rule (repeatable)
+  --json                machine-readable output ({deps, counts}) instead of a table
 
 run options:
   --root <dir>          target repo (default: cwd)
@@ -58,6 +74,7 @@ function parseArgv(argv) {
     else if (a === '--offline') opts.offline = true;
     else if (a === '--registry') opts.registry = true;
     else if (a === '--live') opts.live = true;
+    else if (a === '--json') opts.json = true;
     else if (a.startsWith('--')) {
       const key = a;
       if (!takesValue.has(key)) throw new UsageError(`unknown option: ${a} (try --help)`);
@@ -80,7 +97,7 @@ function parseArgv(argv) {
         case '--to': opts.to = value; break;
         default: throw new UsageError(`unknown option: ${a}`);
       }
-    } else if (opts.command == null && !opts.positional.length && ['run', 'report', 'explain'].includes(a)) {
+    } else if (opts.command == null && !opts.positional.length && ['run', 'report', 'explain', 'plan'].includes(a)) {
       opts.command = a;
     } else {
       opts.positional.push(a);
@@ -108,7 +125,110 @@ function validateFormat(format) {
   return f;
 }
 
-function cmdRun(opts) {
+/** Semver class of an upgrade: major | minor | patch | none | unknown. */
+function semverClass(current, target) {
+  const a = parseSemver(bareVersion(current));
+  const b = parseSemver(bareVersion(target));
+  if (!a || !b) return 'unknown';
+  if (b.major !== a.major) return 'major';
+  if (b.minor !== a.minor) return 'minor';
+  if (b.patch !== a.patch) return 'patch';
+  return 'none';
+}
+
+/**
+ * `plan` — the planning phase only: parse the outdated snapshot, classify
+ * semver, apply include/exclude/majors rules and budgets. Never installs,
+ * never runs tests, never writes.
+ */
+function cmdPlan(opts, io) {
+  const root = path.resolve(opts.root ?? process.cwd());
+  if (!opts.outdatedFile) {
+    throw new UsageError(
+      'plan requires --outdated <file> (an `npm outdated --json` snapshot; planning never touches the network)',
+    );
+  }
+  const { config } = loadConfig({
+    root,
+    configPath: opts.configPath ?? null,
+    overrides: {
+      testCmd: opts.testCmd ?? null,
+      attempts: opts.attempts ?? null,
+      include: opts.include ?? [],
+      exclude: opts.exclude ?? [],
+    },
+  });
+
+  const fetched = createOfflineFetch({ outdatedFile: opts.outdatedFile })({ root });
+  const outdated = fetched.data;
+
+  // same CLI-exclude narrowing as `run`: explicit --exclude drops the dep
+  // entirely; config excludes stay visible as skipped placeholders.
+  const cliExclude = Array.isArray(opts.exclude) ? opts.exclude : [];
+  const planFilter = cliExclude.length ? [...config.update.exclude, ...cliExclude] : [];
+  const planOutdated = planFilter.length
+    ? Object.fromEntries(
+        Object.entries(outdated).filter(([name]) => !matchesAny(planFilter, name)),
+      )
+    : outdated;
+  const plan = buildPlan({
+    root,
+    outdated: planOutdated,
+    config,
+    testCommand: opts.testCmd ?? config.ci.test ?? null,
+  });
+
+  const attemptsPerDep = config.budget['attempts-per-dep'];
+  const deps = plan.entries.map((e) => ({
+    name: e.name,
+    current: bareVersion(e.current),
+    target: e.target,
+    semver: semverClass(e.current, e.target),
+    attempts: attemptsPerDep,
+    needsHuman: e.included && e.policy === 'needs-human',
+    included: e.included,
+    reason: e.reason,
+    status: e.status,
+  }));
+  const counts = {
+    total: deps.length,
+    included: deps.filter((d) => d.included).length,
+    excluded: deps.filter((d) => !d.included).length,
+    major: deps.filter((d) => d.semver === 'major').length,
+    needsHuman: deps.filter((d) => d.needsHuman).length,
+  };
+
+  if (opts.json) {
+    io.stdout.write(`${JSON.stringify({ deps, counts }, null, 2)}\n`);
+    return EXIT_OK;
+  }
+
+  const headers = ['dep', 'current', 'target', 'class', 'attempts', 'needs-human', 'status'];
+  const rows = deps.map((d) => [
+    d.name,
+    d.current,
+    d.target,
+    d.semver,
+    String(d.attempts),
+    d.needsHuman ? 'yes' : 'no',
+    d.status,
+  ]);
+  const widths = headers.map((h, i) =>
+    Math.max(h.length, ...rows.map((r) => r[i].length)),
+  );
+  const line = (cells) => cells.map((c, i) => c.padEnd(widths[i])).join('  ').trimEnd();
+  const out = [
+    `plan: ${deps.length} outdated dep(s) from ${fetched.file}`,
+    line(headers),
+    line(widths.map((w) => '-'.repeat(w))),
+    ...rows.map(line),
+    `${counts.included} included · ${counts.excluded} excluded · ${counts.major} major · ${counts.needsHuman} needs-human · attempts budget: ${attemptsPerDep}/dep`,
+  ];
+  io.stdout.write(`${out.join('\n')}\n`);
+  return EXIT_OK;
+}
+
+function cmdRun(opts, io) {
   const format = validateFormat(opts.format);
   const { report, exitCode } = runDoctor({
     root: opts.root ?? process.cwd(),
@@ -125,17 +245,17 @@ function cmdRun(opts) {
     mdPath: opts.mdPath ?? null,
   });
 
-  if (format === 'json') process.stdout.write(`${renderJSON(report)}\n`);
-  else if (format === 'md') process.stdout.write(`${renderMarkdown(report)}\n`);
-  else process.stdout.write(`${renderTerminal(report)}\n`);
+  if (format === 'json') io.stdout.write(`${renderJSON(report)}\n`);
+  else if (format === 'md') io.stdout.write(`${renderMarkdown(report)}\n`);
+  else io.stdout.write(`${renderTerminal(report)}\n`);
 
   if (exitCode === EXIT_BASELINE_RED) {
-    process.stderr.write('dep-doctor: baseline is red — fix main first, then re-run.\n');
+    io.stderr.write('dep-doctor: baseline is red — fix main first, then re-run.\n');
   }
   return exitCode;
 }
 
-function cmdReport(opts) {
+function cmdReport(opts, io) {
   const file = opts.positional[0];
   if (!file) throw new UsageError('usage: dep-doctor report <file.json> [--format terminal|json|md]');
   if (!fs.existsSync(file)) throw new UsageError(`report file not found: ${file}`);
@@ -149,14 +269,14 @@ function cmdReport(opts) {
     throw new UsageError(`unsupported report schemaVersion: ${report?.schemaVersion} (expected ${SCHEMA_VERSION})`);
   }
   const format = validateFormat(opts.format);
-  if (format === 'json') process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  else if (format === 'md') process.stdout.write(`${renderMarkdown(report)}\n`);
-  else process.stdout.write(`${renderTerminal(report)}\n`);
+  if (format === 'json') io.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  else if (format === 'md') io.stdout.write(`${renderMarkdown(report)}\n`);
+  else io.stdout.write(`${renderTerminal(report)}\n`);
   // report re-renders carry the original gate so CI can re-check cheaply
   return Number.isInteger(report.exitCode) ? report.exitCode : EXIT_OK;
 }
 
-function cmdExplain(opts) {
+function cmdExplain(opts, io) {
   const root = path.resolve(opts.root ?? process.cwd());
   if (!opts.dep) throw new UsageError('usage: dep-doctor explain --dep <name> --from <ver> --to <ver> [--root <dir>]');
   if (!opts.from || !opts.to) throw new UsageError('explain requires --from <version> and --to <version>');
@@ -165,7 +285,7 @@ function cmdExplain(opts) {
   }
   const digest = buildDigest({ root, dep: opts.dep, from: opts.from, to: opts.to });
   const format = validateFormat(opts.format);
-  if (format === 'json') process.stdout.write(`${JSON.stringify(digest, null, 2)}\n`);
+  if (format === 'json') io.stdout.write(`${JSON.stringify(digest, null, 2)}\n`);
   else {
     const out = [];
     out.push(`ResearchDigest: ${digest.dep} ${digest.from} → ${digest.to} (${digest.complete ? 'complete' : 'partial'})`);
@@ -182,38 +302,49 @@ function cmdExplain(opts) {
     }
     out.push(`usage sites: ${digest.usage.count}${digest.usage.truncated ? '+' : ''} in ${digest.usage.scannedFiles} scanned file(s)`);
     for (const s of digest.usage.sites) out.push(`  ${s.file}:${s.line}  ${s.snippet}`);
-    process.stdout.write(`${out.join('\n')}\n`);
+    io.stdout.write(`${out.join('\n')}\n`);
   }
   return EXIT_OK;
 }
 
-function main(argv) {
+/**
+ * CLI entry. `deps.stdout` / `deps.stderr` are injectable write streams
+ * (default: process.stdout/stderr) so tests capture output without
+ * monkey-patching globals.
+ */
+function main(argv, deps = {}) {
+  const io = {
+    stdout: deps.stdout ?? process.stdout,
+    stderr: deps.stderr ?? process.stderr,
+  };
   try {
     const opts = parseArgv(argv);
     if (opts.help || (opts.command == null && argv.length === 0)) {
-      process.stdout.write(`${HELP}\n`);
+      io.stdout.write(`${HELP}\n`);
       return EXIT_OK;
     }
     if (opts.version) {
-      process.stdout.write(`dep-doctor ${TOOL_VERSION}\n`);
+      io.stdout.write(`dep-doctor ${TOOL_VERSION}\n`);
       return EXIT_OK;
     }
     switch (opts.command) {
       case 'run':
-        return cmdRun(opts);
+        return cmdRun(opts, io);
+      case 'plan':
+        return cmdPlan(opts, io);
       case 'report':
-        return cmdReport(opts);
+        return cmdReport(opts, io);
       case 'explain':
-        return cmdExplain(opts);
+        return cmdExplain(opts, io);
       default:
-        throw new UsageError(`unknown command: ${opts.command ?? '(none)'} (expected run | report | explain; try --help)`);
+        throw new UsageError(`unknown command: ${opts.command ?? '(none)'} (expected run | plan | report | explain; try --help)`);
     }
   } catch (e) {
     if (e instanceof UsageError) {
-      process.stderr.write(`dep-doctor: ${e.message}\n`);
+      io.stderr.write(`dep-doctor: ${e.message}\n`);
       return EXIT_USAGE;
     }
-    process.stderr.write(`dep-doctor: unexpected error: ${e?.stack ?? e}\n`);
+    io.stderr.write(`dep-doctor: unexpected error: ${e?.stack ?? e}\n`);
     return EXIT_USAGE;
   }
 }

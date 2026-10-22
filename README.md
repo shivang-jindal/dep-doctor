@@ -207,7 +207,7 @@ node src/cli.js --help
 node src/cli.js run --outdated dep-doctor.outdated.json --test-cmd "node --test test/"   # offline triage + research
 node src/cli.js explain --root . --dep <name> --from <v1> --to <v2>                      # one upgrade's digest
 node src/cli.js report report.json --format md                                           # re-render a saved report
-node --test test/                                                                        # 41 tests
+node --test test/                                                                        # 45 tests
 ```
 
 ## v0 status
@@ -216,11 +216,15 @@ v0 is the **triage-and-research engine** - it decides what an upgrade costs
 and why, before anyone (human or bot) touches code. The patch-generation half
 is the documented v1 story, not a silent gap.
 
-**Shipped, covered by 41 passing tests:**
+**Shipped, covered by 45 passing tests:**
 
 - **Run pipeline**: plan (offline `npm outdated --json` snapshot by default;
   `--registry` opt-in) -> baseline (resolve and record the test oracle) ->
   attempts (budgeted per dep: `--attempts`, `--minutes`) -> research -> report
+- **`plan` command**: the planning phase on its own - parse an `--outdated`
+  snapshot, classify each dep (semver class, attempts budget, needs-human),
+  apply include/exclude/majors rules; human table by default, `--json` for
+  `{deps, counts}`
 - **Attempt runner**: temp-copy apply by default - the target root is never
   written to; every internal write goes to a temp dir and is reported through
   `onWrite` for auditing; `--live` switches to a git worktree
