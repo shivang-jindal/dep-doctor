@@ -43,10 +43,10 @@ function comparePrerelease(a, b) {
 
 /**
  * Total order over semver strings. Unparseable values fall back to string
- * compare. Release components are compared textually (so "1.10.0" sorts
- * before "1.9.0", matching the repo's lexicographic range snapshots), while
- * the prerelease part follows semver ordering (a prerelease sorts before its
- * release).
+ * compare. Release components compare NUMERICALLY — the old textual compare
+ * put "2.0.0" after "10.0.0" (and the doc'd "1.10.0 before 1.9.0" only held
+ * by luck of equal digit widths) — while the prerelease part follows semver
+ * ordering (a prerelease sorts before its release).
  */
 export function compareSemver(a, b) {
   const pa = parseSemver(a);
@@ -54,9 +54,9 @@ export function compareSemver(a, b) {
   if (!pa && !pb) return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
   if (!pa) return -1;
   if (!pb) return 1;
-  const ra = `${pa.major}.${pa.minor}.${pa.patch}`;
-  const rb = `${pb.major}.${pb.minor}.${pb.patch}`;
-  if (ra !== rb) return ra < rb ? -1 : 1;
+  if (pa.major !== pb.major) return pa.major - pb.major;
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+  if (pa.patch !== pb.patch) return pa.patch - pb.patch;
   return comparePrerelease(pa.prerelease, pb.prerelease);
 }
 

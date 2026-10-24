@@ -272,8 +272,11 @@ function cmdReport(opts, io) {
   if (format === 'json') io.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   else if (format === 'md') io.stdout.write(`${renderMarkdown(report)}\n`);
   else io.stdout.write(`${renderTerminal(report)}\n`);
-  // report re-renders carry the original gate so CI can re-check cheaply
-  return Number.isInteger(report.exitCode) ? report.exitCode : EXIT_OK;
+  // report re-renders carry the original gate so CI can re-check cheaply.
+  // Clamp: a hand-edited report could carry any integer, and process exit
+  // codes must stay within the documented gate range (0..3).
+  if (!Number.isInteger(report.exitCode)) return EXIT_OK;
+  return Math.min(Math.max(report.exitCode, 0), EXIT_BASELINE_RED);
 }
 
 function cmdExplain(opts, io) {

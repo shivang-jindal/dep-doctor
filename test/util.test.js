@@ -16,8 +16,8 @@ import { makeTempDir, rmrf } from './support.js';
 
 test('compareSemver orders releases and prereleases', () => {
   assert.ok(compareSemver('1.2.3', '1.2.4') < 0);
-  assert.ok(compareSemver('1.10.0', '1.9.0') < 0); // numeric, not lexicographic
-  assert.ok(compareSemver('2.0.0', '10.0.0') > 0);
+  assert.ok(compareSemver('1.10.0', '1.9.0') > 0); // numeric, not lexicographic
+  assert.ok(compareSemver('2.0.0', '10.0.0') < 0); // numeric, not lexicographic
   assert.equal(compareSemver('4.1.0', '4.1.0'), 0);
   assert.ok(compareSemver('4.0.0-rc.1', '4.0.0') < 0);
   assert.ok(compareSemver('4.0.0-alpha', '4.0.0-beta') < 0);
